@@ -44,10 +44,10 @@ fun main() {
     // The first step is to get the list of connected devices
     val devices = getListOfDevices()
     if (devices.isEmpty()) {
-        println("====> The list of devices is empty")
+        println("ERROR: The list of devices is empty")
         return
     }
-    println("=====> Devices:")
+    println("=====> Devices(${devices.size}):")
     devices.forEach { println(it) }
 
     // It is necessary to install the APKs to one of the devices
@@ -60,10 +60,10 @@ fun main() {
     // Get the list of tests from the first device
     val tests = device.getListOfUITest()
     if (tests.isEmpty()) {
-        println("=====> The list of tests is empty")
+        println("ERROR: The list of tests is empty")
         return
     }
-    println("=====> Tests:")
+    println("=====> Tests(${tests.size}):")
     tests.forEach { println(it) }
 }
 
