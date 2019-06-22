@@ -3,11 +3,18 @@ import java.io.File
 import java.io.IOException
 import java.lang.System.exit
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeUnit.MILLISECONDS
 import java.util.concurrent.TimeUnit.SECONDS
 
 val ERROR_CODE_NO_DEVICES = 1
 val ERROR_CODE_NO_TESTS = 2
-val THREAD_TIMEOUT_SECONDS = 10
+val ERROR_CODE_NO_SHARDS = 3
+
+val THREAD_TIMEOUT_MILLIS = 5_000L
+
+val DEBUG = true
+val NUM_SHARDS = 4
+val SHARD_INDEX = 0
 
 val APP_PACKAGE = "com.asos.app.acceptance.debug"
 val TEST_RUNNER = "$APP_PACKAGE.test/androidx.test.runner.AndroidJUnitRunner"
@@ -19,6 +26,22 @@ val CLASS_REGEX = """class=([\w.]*)""".toRegex()
 val TEST_REGEX = """test=([\w]*)""".toRegex()
 
 
+fun log(any: Any) {
+    if (DEBUG) println(any.toString())
+}
+
+
+/**
+ *
+ * Prints an error message and finish the execution of the script
+ *
+ */
+fun exitWithError(message: String, errorCode: Int) {
+    println("ERROR: $message")
+    exit(errorCode)
+}
+
+
 /**
  *
  * Uses the command "adb devices" to get the list of connected devices.
@@ -26,13 +49,13 @@ val TEST_REGEX = """test=([\w]*)""".toRegex()
  *
  */
 fun getListOfDevices(): List<Device> {
-    println("=====> Getting list of devices")
+    log("=====> Getting list of devices")
     val output = "adb devices".runCommand()
     return ADB_DEVICES_REGEX
-        .findAll(output)
-        .map { it.groupValues }
-        .map { Device(serial = it[1], status = it[2]) }
-        .toList()
+            .findAll(output)
+            .map { it.groupValues }
+            .map { Device(serial = it[1], status = it[2]) }
+            .toList()
 }
 
 
@@ -42,7 +65,7 @@ fun getListOfDevices(): List<Device> {
  *
  */
 fun Device.installApk(path: String) {
-    println("=====> Installing APK from $path into $serial")
+    log("=====> Installing APK from $path into $serial")
     "adb -s $serial install $path".runCommand()
 }
 
@@ -54,14 +77,27 @@ fun Device.installApk(path: String) {
  *
  */
 fun Device.getListOfUITest(): List<Test> {
-    println("=====> Getting list of UI tests")
+    log("=====> Getting list of UI tests")
     val output = "adb -s $serial shell am instrument -w -r -e log true $TEST_RUNNER".runCommand()
-    println("=====> Parsing the lists of tests")
+    log("=====> Parsing the lists of tests")
     return CLASS_REGEX.findAll(output)
-        .zip(TEST_REGEX.findAll(output))
-        .map { Test(it.first.groupValues[1], it.second.groupValues[1]) }
-        .toList()
-        .distinct()
+            .zip(TEST_REGEX.findAll(output))
+            .map { Test(it.first.groupValues[1], it.second.groupValues[1]) }
+            .toList()
+            .distinct()
+}
+
+
+fun createShards(tests: List<Test>): List<Shard> {
+    log("=====> Creating shards")
+    val testsPerShard = tests.size / NUM_SHARDS
+    val shards = mutableListOf<Shard>()
+    for (index in 0 until NUM_SHARDS) {
+        val startPos = index * testsPerShard
+        val lastPos = if (index != NUM_SHARDS - 1) startPos + testsPerShard else tests.size
+        shards.add(Shard(index, tests.subList(startPos, lastPos)))
+    }
+    return shards
 }
 
 
@@ -76,7 +112,7 @@ fun String.runCommand(workingDir: File = File(".")): String
             .redirectOutput(ProcessBuilder.Redirect.PIPE)
             .redirectError(ProcessBuilder.Redirect.PIPE)
             .start().apply {
-                waitFor(THREAD_TIMEOUT_SECONDS, SECONDS)
+                waitFor(THREAD_TIMEOUT_MILLIS, MILLISECONDS)
             }.inputStream.bufferedReader().readText()
 
 
@@ -94,7 +130,16 @@ data class Device(val serial: String, val status: String)
  *
  */
 data class Test(val className: String, val testName: String) {
-    override fun toString() = "$className#$testName"
+    val fullName get() = "$className#$testName"
+}
+
+/**
+ *
+ * Data class for the Shards
+ *
+ */
+data class Shard(val index: Int, val tests: List<Test>) {
+    override fun toString() = "Shard(index=$index, numTest=${tests.size})"
 }
 
 
@@ -105,14 +150,15 @@ data class Test(val className: String, val testName: String) {
  */
 fun main(args: Array<String>) {
 
+    log(args)
+
     // Step 1) get the list of devices
     val devices = getListOfDevices()
     if (devices.isEmpty()) {
-        println("ERROR: The list of devices is empty")
-        exit(ERROR_CODE_NO_DEVICES)
+        exitWithError("The list of devices is empty", ERROR_CODE_NO_DEVICES)
     }
-    println("=====> Devices(${devices.size}):")
-    devices.forEach { println(it) }
+    log("=====> Devices(${devices.size}):")
+    devices.forEach { log(it) }
 
     // Step 2) install the APKs to the first device
     val device = devices.first()
@@ -124,11 +170,26 @@ fun main(args: Array<String>) {
     // Step 3) get the full list of UI tests
     val tests = device.getListOfUITest()
     if (tests.isEmpty()) {
-        println("ERROR: The list of tests is empty")
-        exit(ERROR_CODE_NO_TESTS)
+        exitWithError("The list of tests is empty", ERROR_CODE_NO_TESTS)
     }
-    println("=====> Tests(${tests.size}):")
-    tests.forEach { println(it) }
+    log("=====> Tests(${tests.size}):")
+    tests.forEach { log(it) }
+
+    // Step 4) create the shards
+    val shards = createShards(tests)
+    if (shards.isEmpty()) {
+        exitWithError("The list of shards is empty", ERROR_CODE_NO_SHARDS)
+    }
+    log("=====> Shards(${shards.size}):")
+    shards.forEach { log(it) }
+
+    // Step 4) return the list of fullnames of the selected shard
+    val shard = shards[SHARD_INDEX]
+    val fullNames = shard.tests
+            .map { it.fullName }
+            .joinToString(separator = ",")
+    log("Shard:")
+    println(fullNames)
 
 }
 
