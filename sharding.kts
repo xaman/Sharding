@@ -1,33 +1,69 @@
-import Sharding.Device
 import java.io.File
 import java.io.IOException
 import java.lang.System.exit
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeUnit.MILLISECONDS
-import java.util.concurrent.TimeUnit.SECONDS
 
-val ERROR_CODE_NO_DEVICES = 1
-val ERROR_CODE_NO_TESTS = 2
-val ERROR_CODE_NO_SHARDS = 3
+val SUCCESS_CODE = 0
+val ERROR_CODE_NO_PARAMETER = 1
+val ERROR_CODE_NO_DEVICES = 2
+val ERROR_CODE_NO_TESTS = 3
+val ERROR_CODE_NO_SHARDS = 4
 
 val THREAD_TIMEOUT_MILLIS = 5_000L
 
-val DEBUG = true
-val NUM_SHARDS = 4
-val SHARD_INDEX = 0
-
-val APP_PACKAGE = "com.asos.app.acceptance.debug"
-val TEST_RUNNER = "$APP_PACKAGE.test/androidx.test.runner.AndroidJUnitRunner"
-val APK_PATH = "~/Desktop/app-debug.apk"
-val TEST_APK_PATH = "~/Desktop/app-debug-androidTest.apk"
+var DEBUG = false
 
 val ADB_DEVICES_REGEX = """([\w-]{5,})[\t\s]*(device)""".toRegex()
 val CLASS_REGEX = """class=([\w.]*)""".toRegex()
 val TEST_REGEX = """test=([\w]*)""".toRegex()
 
 
-fun log(any: Any) {
-    if (DEBUG) println(any.toString())
+fun log(any: Any) { if (DEBUG) println(any.toString()) }
+
+
+/**
+ *
+ * Composes the test runner name using the app package
+ *
+ */
+fun getTestRunnerName(appPackage: String) = "$appPackage.test/androidx.test.runner.AndroidJUnitRunner"
+
+
+/**
+ *
+ * Prints the help menu
+ *
+ */
+fun printHelp() {
+    println("""
+
+    Use:
+    ----
+    kotlinc -script sharding.kts <app_package> <apk_path> <test_apk_path> <shards_number> <shard_index> [<debug>]
+
+    Mandatory params:
+    -----------------
+    <app_package>: full package of the app. Example: com.martinchamarro.app
+    <apk_path>: relative or absolute path of the APK. Build with "./gradlew assembleAcceptanceDebug"
+    <test_apk_path>: relative or absolute path of the test APK. Build with "./gradlew assembleAcceptanceDebugAndroidTest"
+    <shards_number>: integer with the number of test groups
+    <shard_index>: integer with the selected test group position
+
+    Optinal params:
+    ---------------
+    <debug>: boolean to enable the logging
+
+    """.trimIndent())
+}
+
+
+fun mandatoryParam(args: Array<String>, paramName: String, position: Int): String {
+    val value = args.getOrNull(position) ?: ""
+    if (value.isEmpty()) {
+        exitWithError("The parameter $paramName is mandatory", ERROR_CODE_NO_PARAMETER, printHelp = true)
+    }
+    return value
 }
 
 
@@ -36,8 +72,9 @@ fun log(any: Any) {
  * Prints an error message and finish the execution of the script
  *
  */
-fun exitWithError(message: String, errorCode: Int) {
-    println("ERROR: $message")
+fun exitWithError(message: String, errorCode: Int, printHelp: Boolean = false) {
+    println("\nERROR: $message")
+    if (printHelp) printHelp()
     exit(errorCode)
 }
 
@@ -76,9 +113,10 @@ fun Device.installApk(path: String) {
  * Uses te regular expressions [CLASS_REGEX] and [TEST_REGEX] to get the test classes and names
  *
  */
-fun Device.getListOfUITest(): List<Test> {
+fun Device.getListOfUITest(packageName: String): List<Test> {
     log("=====> Getting list of UI tests")
-    val output = "adb -s $serial shell am instrument -w -r -e log true $TEST_RUNNER".runCommand()
+    val testRunner = getTestRunnerName(packageName)
+    val output = "adb -s $serial shell am instrument -w -r -e log true $testRunner".runCommand()
     log("=====> Parsing the lists of tests")
     return CLASS_REGEX.findAll(output)
             .zip(TEST_REGEX.findAll(output))
@@ -88,13 +126,18 @@ fun Device.getListOfUITest(): List<Test> {
 }
 
 
-fun createShards(tests: List<Test>): List<Shard> {
+/**
+ *
+ * Splits the list of tests in shards
+ *
+ */
+fun createShards(tests: List<Test>, shardsNumber: Int): List<Shard> {
     log("=====> Creating shards")
-    val testsPerShard = tests.size / NUM_SHARDS
+    val testsPerShard = tests.size / shardsNumber
     val shards = mutableListOf<Shard>()
-    for (index in 0 until NUM_SHARDS) {
+    for (index in 0 until shardsNumber) {
         val startPos = index * testsPerShard
-        val lastPos = if (index != NUM_SHARDS - 1) startPos + testsPerShard else tests.size
+        val lastPos = if (index != shardsNumber - 1) startPos + testsPerShard else tests.size
         shards.add(Shard(index, tests.subList(startPos, lastPos)))
     }
     return shards
@@ -150,7 +193,13 @@ data class Shard(val index: Int, val tests: List<Test>) {
  */
 fun main(args: Array<String>) {
 
-    log(args)
+    val packageName = mandatoryParam(args, "<app_package>", 0)
+    val apkPath = mandatoryParam(args, "<apk_path>", 1)
+    val testApkPath = mandatoryParam(args, "<test_apk_path>", 2)
+    val shardsNumber = mandatoryParam(args, "<shards_number>", 3).toInt()
+    val shardIndex = mandatoryParam(args, "<shard_index>", 4).toInt()
+
+    DEBUG = args.getOrNull(5)?.toBoolean() ?: false
 
     // Step 1) get the list of devices
     val devices = getListOfDevices()
@@ -163,12 +212,12 @@ fun main(args: Array<String>) {
     // Step 2) install the APKs to the first device
     val device = devices.first()
     device.apply {
-        installApk(APK_PATH)
-        installApk(TEST_APK_PATH)
+        installApk(apkPath)
+        installApk(testApkPath)
     }
 
     // Step 3) get the full list of UI tests
-    val tests = device.getListOfUITest()
+    val tests = device.getListOfUITest(packageName)
     if (tests.isEmpty()) {
         exitWithError("The list of tests is empty", ERROR_CODE_NO_TESTS)
     }
@@ -176,15 +225,15 @@ fun main(args: Array<String>) {
     tests.forEach { log(it) }
 
     // Step 4) create the shards
-    val shards = createShards(tests)
+    val shards = createShards(tests, shardsNumber)
     if (shards.isEmpty()) {
         exitWithError("The list of shards is empty", ERROR_CODE_NO_SHARDS)
     }
     log("=====> Shards(${shards.size}):")
     shards.forEach { log(it) }
 
-    // Step 4) return the list of fullnames of the selected shard
-    val shard = shards[SHARD_INDEX]
+    // Step 4) return the list of test fullnames of the selected shard
+    val shard = shards[shardIndex]
     val fullNames = shard.tests
             .map { it.fullName }
             .joinToString(separator = ",")
