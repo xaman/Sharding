@@ -15,9 +15,10 @@ Kotlin script to create shards of UI tests. The output is a comma-separated list
 #### Parameters
 
 ```
- Use:
+
+    Use:
     ----
-    kotlinc -script sharding.kts <app_package> <apk_path> <test_apk_path> <shards_number> <shard_index> [<debug>]
+    kotlinc -script sharding.kts <app_package> <apk_path> <test_apk_path> <shards_number> <shard_index> [<filter>] [<debug>]
 
     Mandatory params:
     -----------------
@@ -26,9 +27,11 @@ Kotlin script to create shards of UI tests. The output is a comma-separated list
     <test_apk_path>: relative or absolute path of the test APK. Build with "./gradlew assembleAcceptanceDebugAndroidTest"
     <shards_number>: integer with the number of test groups
     <shard_index>: integer with the selected test group position
+    <shard
 
     Optinal params:
     ---------------
+    <filter>: a String to filter the tests using the full name
     <debug>: boolean to enable the logging
 
 ```

@@ -10,7 +10,7 @@ val ERROR_CODE_NO_DEVICES = 2
 val ERROR_CODE_NO_TESTS = 3
 val ERROR_CODE_NO_SHARDS = 4
 
-val THREAD_TIMEOUT_MILLIS = 5_000L
+val THREAD_TIMEOUT_MILLIS = 1_000L
 
 var DEBUG = false
 
@@ -40,7 +40,7 @@ fun printHelp() {
 
     Use:
     ----
-    kotlinc -script sharding.kts <app_package> <apk_path> <test_apk_path> <shards_number> <shard_index> [<debug>]
+    kotlinc -script sharding.kts <app_package> <apk_path> <test_apk_path> <shards_number> <shard_index> [<filter>] [<debug>]
 
     Mandatory params:
     -----------------
@@ -49,9 +49,11 @@ fun printHelp() {
     <test_apk_path>: relative or absolute path of the test APK. Build with "./gradlew assembleAcceptanceDebugAndroidTest"
     <shards_number>: integer with the number of test groups
     <shard_index>: integer with the selected test group position
+    <shard
 
     Optinal params:
     ---------------
+    <filter>: a String to filter the tests using the full name
     <debug>: boolean to enable the logging
 
     """.trimIndent())
@@ -128,6 +130,17 @@ fun Device.getListOfUITest(packageName: String): List<Test> {
 
 /**
  *
+ * Filters the tests ignoring the case
+ *
+ */
+fun filter(tests: List<Test>, filter: String): List<Test> {
+    log("=====> Filtering the tests with '$filter'")
+    return tests.filter { it.fullName.contains(filter, ignoreCase = true) }
+}
+
+
+/**
+ *
  * Splits the list of tests in shards
  *
  */
@@ -198,10 +211,12 @@ fun main(args: Array<String>) {
     val testApkPath = mandatoryParam(args, "<test_apk_path>", 2)
     val shardsNumber = mandatoryParam(args, "<shards_number>", 3).toInt()
     val shardIndex = mandatoryParam(args, "<shard_index>", 4).toInt()
+    val filter = args.getOrNull(5) ?: ""
+    DEBUG = args.getOrNull(6)?.toBoolean() ?: false
 
-    DEBUG = args.getOrNull(5)?.toBoolean() ?: false
-
+    //
     // Step 1) get the list of devices
+    //
     val devices = getListOfDevices()
     if (devices.isEmpty()) {
         exitWithError("The list of devices is empty", ERROR_CODE_NO_DEVICES)
@@ -209,14 +224,18 @@ fun main(args: Array<String>) {
     log("=====> Devices(${devices.size}):")
     devices.forEach { log(it) }
 
+    //
     // Step 2) install the APKs to the first device
+    //
     val device = devices.first()
     device.apply {
         installApk(apkPath)
         installApk(testApkPath)
     }
 
+    //
     // Step 3) get the full list of UI tests
+    //
     val tests = device.getListOfUITest(packageName)
     if (tests.isEmpty()) {
         exitWithError("The list of tests is empty", ERROR_CODE_NO_TESTS)
@@ -224,15 +243,26 @@ fun main(args: Array<String>) {
     log("=====> Tests(${tests.size}):")
     tests.forEach { log(it) }
 
-    // Step 4) create the shards
-    val shards = createShards(tests, shardsNumber)
+    //
+    // Step 4) filter the tests
+    //
+    val filteredTests = filter(tests, filter)
+    log("=====> Filtered tests(${filteredTests.size}):")
+    filteredTests.forEach { log(it) }
+
+    //
+    // Step 5) create the shards
+    //
+    val shards = createShards(filteredTests, shardsNumber)
     if (shards.isEmpty()) {
         exitWithError("The list of shards is empty", ERROR_CODE_NO_SHARDS)
     }
     log("=====> Shards(${shards.size}):")
     shards.forEach { log(it) }
 
-    // Step 4) return the list of test fullnames of the selected shard
+    //
+    // Step 6) return the list of test fullnames of the selected shard
+    //
     val shard = shards[shardIndex]
     val fullNames = shard.tests
             .map { it.fullName }
